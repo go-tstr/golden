@@ -142,7 +142,7 @@ func TestEqual_No_Match(t *testing.T) {
 	got := golden.Assert(&mt, "other string")
 	assert.False(t, got)
 	assert.Contains(t, mt.msg, "Not equal:")
-	assert.False(t, mt.failed) // In case of assert failure, FailNow is not called
+	assert.True(t, mt.failed)
 }
 
 func TestRequest(t *testing.T) {
@@ -154,6 +154,38 @@ func TestRequest(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 	require.NoError(t, err)
 	golden.Request(t, http.DefaultClient, req, http.StatusBadRequest)
+}
+
+func TestProcessJSON(t *testing.T) {
+	const (
+		data1 = `{"name": "someone", "age": 41, "active": true}`
+		data2 = `{"name": "someone", "age": 42, "active": true}`
+	)
+
+	fh := &golden.FileHandler{
+		FileName:       golden.TestNameToFilePath,
+		ShouldRecreate: func(t golden.T) bool { return true },
+		Equal:          golden.EqualWithDiff,
+		ProcessContent: golden.PrettyJSON,
+	}
+
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll("./testdata/TestSomeJSON"), "failed to remove testdata") })
+	mt1 := mockT{name: "TestSomeJSON"}
+	assert.True(t, fh.Assert(&mt1, data1))
+	assert.Empty(t, mt1.msg)
+	assert.False(t, mt1.failed)
+
+	fh.ShouldRecreate = func(t golden.T) bool { return false }
+	mt2 := mockT{name: "TestSomeJSON"}
+	assert.True(t, fh.Assert(&mt2, data1))
+	assert.Empty(t, mt2.msg)
+	assert.False(t, mt2.failed)
+
+	mt3 := mockT{name: "TestSomeJSON"}
+	assert.False(t, fh.Assert(&mt3, data2))
+	assert.Contains(t, mt3.msg, `-  "age": 41,`)
+	assert.Contains(t, mt3.msg, `+  "age": 42,`)
+	assert.True(t, mt3.failed)
 }
 
 func assertResult(t *testing.T, tt test, mt *mockT) {
@@ -172,8 +204,11 @@ type mockT struct {
 	msg    string
 }
 
-func (m *mockT) Name() string                         { return m.name }
-func (m *mockT) Logf(f string, args ...interface{})   { fmt.Printf(f, args...) }
-func (m *mockT) Errorf(f string, args ...interface{}) { m.msg += "\n" + fmt.Sprintf(f, args...) }
-func (m *mockT) FailNow()                             { m.failed = true }
-func (m *mockT) Helper()                              {}
+func (m *mockT) Name() string                       { return m.name }
+func (m *mockT) Logf(f string, args ...interface{}) { fmt.Printf(f, args...) }
+func (m *mockT) FailNow()                           { m.failed = true }
+func (m *mockT) Helper()                            {}
+func (m *mockT) Errorf(f string, args ...interface{}) {
+	m.failed = true
+	m.msg += "\n" + fmt.Sprintf(f, args...)
+}

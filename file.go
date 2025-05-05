@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tidwall/pretty"
 )
 
 var DefaultHandler = &FileHandler{
@@ -152,6 +153,15 @@ func NoError(t T, err error, msg string) {
 	}
 }
 
+// EqualWithDiff compares two strings and returns true if they are equal.
+// If they are not equal, test will be marked as failed and the diff will be logged.
 func EqualWithDiff(t T, expected, actual string, msgAndArgs ...interface{}) (ok bool) {
 	return assert.Equal(t, expected, actual, msgAndArgs...)
+}
+
+// PrettyJSON formats the JSON string using the pretty package.
+// This is useful for making the JSON more readable in the golden file
+// also provides cleaner diffs when comparing JSON files.
+func PrettyJSON(t T, data string) string {
+	return string(pretty.Pretty([]byte(data)))
 }
