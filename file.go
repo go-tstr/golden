@@ -7,14 +7,26 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-var overwrite, _ = strconv.ParseBool(os.Getenv("OVERWRITE_GOLDEN_FILES"))
+var DefaultHandler = &FileHandler{
+	FileName:       TestNameToFilePath,
+	ShouldRecreate: ParseRecreateFromEnv,
+	Equal:          EqualWithDiff,
+	ProcessContent: nil,
+}
+
+type FileHandler struct {
+	FileName       func(T) string
+	ShouldRecreate func(T) bool
+	ProcessContent func(T, string) string
+	Equal          func(t T, expected, actual string, msgAndArgs ...interface{}) (ok bool)
+}
 
 type T interface {
 	Logf(format string, args ...any)
@@ -24,6 +36,7 @@ type T interface {
 	Helper()
 }
 
+// Client is an interface that allows using http.Client or any other client that implements the Do method.
 type Client interface {
 	Do(req *http.Request) (*http.Response, error)
 }
@@ -58,35 +71,56 @@ type Client interface {
 //		}
 //	}
 func Request(t T, client Client, req *http.Request, expectedStatusCode int) (*http.Response, bool) {
-	t.Helper()
+	return DefaultHandler.Request(t, client, req, expectedStatusCode)
+}
+
+// Assert checks the golden file content against the given data.
+func Assert(t T, data string) bool {
+	return DefaultHandler.Assert(t, data)
+}
+
+func (h *FileHandler) Request(t T, client Client, req *http.Request, expectedStatusCode int) (*http.Response, bool) {
 	resp, err := client.Do(req)
-	require.NoError(t, err, "client.Do failed")
+	NoError(t, err, "client.Do failed")
 
-	ok := assert.Equal(t, expectedStatusCode, resp.StatusCode, "unexpected status code")
+	ok := true
+	if resp.StatusCode != expectedStatusCode {
+		ok = false
+		t.Errorf("expected status code %d, got %d", expectedStatusCode, resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
-	ok = assert.NoError(t, err, "reading response body failed") && ok
+	NoError(t, err, "reading response body failed")
+
 	resp.Body = io.NopCloser(bytes.NewReader(body))
-	return resp, Equal(t, string(body)) && ok
+	return resp, h.Assert(t, string(body)) && ok
 }
 
-// Equal asserts that the golden file content is equal to the data in string format.
-func Equal(t T, data string) bool {
+func (h *FileHandler) Assert(t T, data string) bool {
 	t.Helper()
-	return assert.Equal(t, File(t, data), string(data))
+	if h.ProcessContent != nil {
+		data = h.ProcessContent(t, data)
+	}
+	return h.Equal(t, h.loadAndSaveFile(t, data), data)
 }
 
-// File returns the golden file content for the test.
-// If OVERWRITE_GOLDEN_FILES env is set to true, the golden file will be created with the content of the data.
-// OVERWRITE_GOLDEN_FILES is read only once at the start of the test and it's value is not updated.
-// Depending of the test structure the golden file and it's directories arew created in
-// ./testdata/{testFuncName}/{subTestName}.golden or ./testdata/{testFuncName}/{testFuncName}.golden.
-func File(t T, data string) string {
-	t.Helper()
-	return file(t, data, overwrite)
+func (h *FileHandler) loadAndSaveFile(t T, data string) string {
+	fileName := h.FileName(t)
+	if h.ShouldRecreate(t) {
+		t.Logf("recreating golden file: %s", fileName)
+		NoError(t, os.MkdirAll(filepath.Dir(fileName), 0o755), "failed to create testdata directory for golden file")
+		NoError(t, os.WriteFile(fileName, []byte(data), 0o600), "failed to write golden file")
+	}
+
+	b, err := os.ReadFile(fileName)
+	NoError(t, err, "failed to read golden file")
+	return string(b)
 }
 
-func file(t T, data string, recreate bool) string {
-	t.Helper()
+// TestNameToFilePath creates file name and path for the golden file using t.Name() with following rules:
+// Top level: ./testdata/{testFuncName}/{testFuncName}.golden
+// Subtest:   ./testdata/{testFuncName}/{subTestName}.golden
+func TestNameToFilePath(t T) string {
 	split := strings.SplitN(t.Name(), "/", 2)
 	mainTestName := t.Name()
 	testName := t.Name()
@@ -95,15 +129,29 @@ func file(t T, data string, recreate bool) string {
 		testName = strings.ReplaceAll(split[1], "/", "_")
 	}
 
-	folderName := fmt.Sprintf("./testdata/%s", mainTestName)
-	fileName := strings.ReplaceAll(fmt.Sprintf("%s/%s.golden", folderName, testName), " ", "_")
-	if recreate {
-		t.Logf("recreating golden file: %s", fileName)
-		require.NoError(t, os.MkdirAll(folderName, 0o755), "failed to create testdata directory for golden file")
-		require.NoError(t, os.WriteFile(fileName, []byte(data), 0o600), "failed to write golden file")
+	return strings.ReplaceAll(filepath.Join("./testdata/", mainTestName, testName+".golden"), " ", "_")
+}
+
+// ParseRecreateFromEnv checks if the environment variable GOLDEN_FILES_RECREATE is set to true.
+func ParseRecreateFromEnv(t T) bool {
+	str := os.Getenv("GOLDEN_FILES_RECREATE")
+	if str == "" {
+		return false
 	}
 
-	b, err := os.ReadFile(fileName)
-	require.NoError(t, err, "failed to read golden file")
-	return string(b)
+	overwrite, err := strconv.ParseBool(str)
+	NoError(t, err, fmt.Sprintf("failed to parse GOLDEN_FILES_RECREATE env variable: '%s' to bool", str))
+	return overwrite
+}
+
+func NoError(t T, err error, msg string) {
+	t.Helper()
+	if err != nil {
+		t.Errorf("%s: %s", msg, err)
+		t.FailNow()
+	}
+}
+
+func EqualWithDiff(t T, expected, actual string, msgAndArgs ...interface{}) (ok bool) {
+	return assert.Equal(t, expected, actual, msgAndArgs...)
 }
