@@ -1,4 +1,4 @@
-package golden
+package golden_test
 
 import (
 	"fmt"
@@ -7,6 +7,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/go-tstr/golden"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -52,12 +53,20 @@ func TestFile(t *testing.T) {
 		},
 	}
 
+	fh := &golden.FileHandler{
+		FileName:       golden.TestNameToFilePath,
+		ShouldRecreate: golden.ParseRecreateFromEnv,
+		Equal:          golden.EqualWithDiff,
+		ProcessContent: nil,
+	}
+
 	t.Run("create", func(t *testing.T) {
+		t.Setenv("GOLDEN_FILES_RECREATE", "true")
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				mt := &tt.mt
-				got := file(mt, tt.data, true)
-				assertResult(t, tt, mt, got)
+				fh.Assert(mt, tt.data)
+				assertResult(t, tt, mt)
 			})
 		}
 	})
@@ -66,8 +75,8 @@ func TestFile(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				mt := &tt.mt
-				got := File(mt, tt.data)
-				assertResult(t, tt, mt, got)
+				fh.Assert(mt, tt.data)
+				assertResult(t, tt, mt)
 			})
 		}
 	})
@@ -75,13 +84,14 @@ func TestFile(t *testing.T) {
 	const suffix = " overwrite"
 
 	t.Run("overwrite", func(t *testing.T) {
+		t.Setenv("GOLDEN_FILES_RECREATE", "true")
 		for _, tt := range tests {
 			tt.data += suffix
 			tt.expectedData += suffix
 			t.Run(tt.name, func(t *testing.T) {
 				mt := &tt.mt
-				got := file(mt, tt.data, true)
-				assertResult(t, tt, mt, got)
+				fh.Assert(mt, tt.data)
+				assertResult(t, tt, mt)
 			})
 		}
 	})
@@ -92,8 +102,8 @@ func TestFile(t *testing.T) {
 			tt.expectedData += suffix
 			t.Run(tt.name, func(t *testing.T) {
 				mt := &tt.mt
-				got := File(mt, tt.data)
-				assertResult(t, tt, mt, got)
+				fh.Assert(mt, tt.data)
+				assertResult(t, tt, mt)
 			})
 		}
 	})
@@ -101,10 +111,9 @@ func TestFile(t *testing.T) {
 
 func TestFolderDoesNotExist(t *testing.T) {
 	mt := mockT{name: "TestDirFail"}
-	got := File(&mt, "data")
-	assert.Empty(t, got)
+	golden.Assert(&mt, "data")
 	assert.True(t, mt.failed)
-	assert.Contains(t, mt.msg, "open ./testdata/TestDirFail/TestDirFail.golden: no such file or directory")
+	assert.Contains(t, mt.msg, "open testdata/TestDirFail/TestDirFail.golden: no such file or directory")
 	assert.NoDirExists(t, "./testdata/TestDirFail")
 }
 
@@ -116,7 +125,7 @@ func TestEqual(t *testing.T) {
 	assert.NoError(t, os.WriteFile("./testdata/TestSomeString/TestSomeString.golden", []byte(data), 0o600))
 
 	mt := mockT{name: "TestSomeString"}
-	got := Equal(&mt, data)
+	got := golden.Assert(&mt, data)
 	assert.True(t, got)
 	assert.Empty(t, mt.msg)
 	assert.False(t, mt.failed)
@@ -130,7 +139,7 @@ func TestEqual_No_Match(t *testing.T) {
 	assert.NoError(t, os.WriteFile("./testdata/TestSomeOtherString/TestSomeOtherString.golden", data, 0o600))
 
 	mt := mockT{name: "TestSomeOtherString"}
-	got := Equal(&mt, "other string")
+	got := golden.Assert(&mt, "other string")
 	assert.False(t, got)
 	assert.Contains(t, mt.msg, "Not equal:")
 	assert.False(t, mt.failed) // In case of assert failure, FailNow is not called
@@ -144,12 +153,11 @@ func TestRequest(t *testing.T) {
 
 	req, err := http.NewRequest(http.MethodGet, srv.URL, nil)
 	require.NoError(t, err)
-	Request(t, http.DefaultClient, req, http.StatusBadRequest)
+	golden.Request(t, http.DefaultClient, req, http.StatusBadRequest)
 }
 
-func assertResult(t *testing.T, tt test, mt *mockT, got string) {
+func assertResult(t *testing.T, tt test, mt *mockT) {
 	t.Helper()
-	assert.Equal(t, tt.expectedData, got)
 	assert.Empty(t, mt.msg)
 	assert.False(t, mt.failed)
 	assert.FileExists(t, tt.expectedPath)
@@ -166,6 +174,6 @@ type mockT struct {
 
 func (m *mockT) Name() string                         { return m.name }
 func (m *mockT) Logf(f string, args ...interface{})   { fmt.Printf(f, args...) }
-func (m *mockT) Errorf(f string, args ...interface{}) { m.msg = fmt.Sprintf(f, args...) }
+func (m *mockT) Errorf(f string, args ...interface{}) { m.msg += "\n" + fmt.Sprintf(f, args...) }
 func (m *mockT) FailNow()                             { m.failed = true }
 func (m *mockT) Helper()                              {}
