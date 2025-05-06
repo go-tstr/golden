@@ -5,7 +5,7 @@
 Golden file testing is a technique where the expected output of a test is
 
 - generated automatically from test
-- stored in a separate file (the "golden file")
-- verified to never change unless explicitly regerated
+- stored in a separate file
+- verified to never change unless explicitly re-created
 
 During testing, the actual output is compared against the contents of the golden file. If the outputs match, the test passes; if not, the test fails. This approach is especially useful for testing complex outputs such as JSON, HTML, or other structured data, as it makes it easy to review and update expected outputs.
