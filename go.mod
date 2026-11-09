@@ -4,7 +4,7 @@ go 1.27.3
 
 require (
 	github.com/stretchr/testify v1.12.1
-	github.com/tidwall/pretty v1.2.2
+	github.com/tidwall/pretty v1.3.0
 )
 
 require (
